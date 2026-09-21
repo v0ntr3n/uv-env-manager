@@ -64,7 +64,7 @@ You will see an interactive menu similar to:
 
 Select an environment by number to open a shell with that virtual environment activated.
 
-To leave the activated environment:
+The activated environment runs in a child shell, so your original shell stays unchanged. To return to it, run:
 
 ```bash
 exit
