@@ -102,19 +102,36 @@ show_envs() {
 open_activated_shell() {
     local env_dir="$1"
     local activate
-    activate="$(activate_path "$env_dir")" || die "Activation script not found for $env_dir"
 
-    local shell_bin="${SHELL:-/bin/bash}"
+    activate="$(activate_path "$env_dir")" || \
+        die "Activation script not found for $env_dir"
+
     say "  Opening activated shell for '$(basename "$env_dir")'..." "$c_cyan"
     say "  Type 'exit' to return to your previous shell." "$c_gray"
     printf '\n'
 
-    # Source the venv activation file inside a new interactive shell.
-    # BASH_ENV is not enough for interactive shells, so use -c explicitly.
-    if [[ "$(basename "$shell_bin")" == "zsh" ]]; then
-        exec zsh -i -c "source '$activate'; exec zsh -i"
+    local shell_name
+    shell_name="$(basename "${SHELL:-/bin/bash}")"
+
+    if [[ "$shell_name" == "bash" ]]; then
+        local rcfile
+        rcfile="$(mktemp)"
+
+        cat > "$rcfile" <<EOF
+[[ -f "\$HOME/.bashrc" ]] && source "\$HOME/.bashrc"
+source "$activate"
+rm -f "$rcfile"
+EOF
+
+        exec bash --rcfile "$rcfile" -i
+
+    elif [[ "$shell_name" == "zsh" ]]; then
+        exec zsh -i -c "source '$activate'; zsh -i"
+
     else
-        exec "$shell_bin" -i -c "source '$activate'; exec '$shell_bin' -i"
+        # Fallback
+        source "$activate"
+        exec "${SHELL:-/bin/bash}" -i
     fi
 }
 
