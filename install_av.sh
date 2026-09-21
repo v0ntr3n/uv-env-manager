@@ -1,53 +1,47 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-AV_SOURCE="$SCRIPT_DIR/av"
+REPO="v0ntr3n/uv-env-manager"
+BRANCH="main"
+RAW="https://raw.githubusercontent.com/$REPO/$BRANCH"
 
-if [[ ! -f "$AV_SOURCE" ]]; then
-    echo "Error: 'av' must be in the same directory as this installer." >&2
+echo "================================="
+echo " uv-env-manager installer"
+echo "================================="
+echo
+
+# curl is required because this installer itself is normally launched with curl.
+if ! command -v curl >/dev/null 2>&1; then
+    echo "[!] curl is required."
     exit 1
 fi
 
-echo "==> Installing prerequisites..."
-if command -v apt-get >/dev/null 2>&1; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y curl ca-certificates
-fi
+# -------------------------------------------------------
+# Install uv
+# -------------------------------------------------------
 
 if ! command -v uv >/dev/null 2>&1; then
     echo "==> Installing uv..."
+
     curl -LsSf https://astral.sh/uv/install.sh | sh
 
-    # uv's installer normally uses ~/.local/bin.
-    export PATH="$HOME/.local/bin:$PATH"
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+else
+    echo "==> uv already installed"
 fi
 
 if ! command -v uv >/dev/null 2>&1; then
-    echo "Error: uv was installed but is not currently on PATH." >&2
-    echo "Add \$HOME/.local/bin to PATH and rerun this installer." >&2
+    echo "[!] uv installation failed or uv is not on PATH."
     exit 1
 fi
 
-echo "==> uv: $(uv --version)"
+echo "==> $(uv --version)"
 
-# When installing as root, make uv available system-wide as well.
-if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-    UV_BIN="$(command -v uv)"
-    if [[ "$UV_BIN" != "/usr/local/bin/uv" ]]; then
-        install -m 0755 "$UV_BIN" /usr/local/bin/uv
-    fi
-    if command -v uvx >/dev/null 2>&1; then
-        UVX_BIN="$(command -v uvx)"
-        if [[ "$UVX_BIN" != "/usr/local/bin/uvx" ]]; then
-            install -m 0755 "$UVX_BIN" /usr/local/bin/uvx
-        fi
-    fi
-fi
+# -------------------------------------------------------
+# Choose installation directory
+# -------------------------------------------------------
 
-# System-wide installation when root; user-local otherwise.
-if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+if [[ "$(id -u)" -eq 0 ]]; then
     INSTALL_DIR="/usr/local/bin"
 else
     INSTALL_DIR="$HOME/.local/bin"
@@ -55,18 +49,58 @@ else
 fi
 
 echo "==> Installing av to $INSTALL_DIR/av"
-install -m 0755 "$AV_SOURCE" "$INSTALL_DIR/av"
+
+# -------------------------------------------------------
+# Download av
+# -------------------------------------------------------
+
+TMP_FILE="$(mktemp)"
+
+cleanup() {
+    rm -f "$TMP_FILE"
+}
+
+trap cleanup EXIT
+
+curl -fsSL "$RAW/av" -o "$TMP_FILE"
+
+chmod +x "$TMP_FILE"
+install -m 0755 "$TMP_FILE" "$INSTALL_DIR/av"
+
+# -------------------------------------------------------
+# Environment storage
+# -------------------------------------------------------
 
 ENV_ROOT="${AV_ENV_ROOT:-$HOME/.local/share/uv_venv}"
 mkdir -p "$ENV_ROOT"
 
+# -------------------------------------------------------
+# PATH
+# -------------------------------------------------------
+
+if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+    echo
+    echo "==> Adding $INSTALL_DIR to PATH"
+
+    if [[ -f "$HOME/.bashrc" ]]; then
+        if ! grep -qF "$INSTALL_DIR" "$HOME/.bashrc"; then
+            echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$HOME/.bashrc"
+        fi
+    fi
+
+    export PATH="$INSTALL_DIR:$PATH"
+fi
+
 echo
-echo "Installed successfully."
-echo "  av command: $INSTALL_DIR/av"
-echo "  env root:   $ENV_ROOT"
+echo "================================="
+echo " Installation complete"
+echo "================================="
+echo
+echo "av:      $INSTALL_DIR/av"
+echo "envs:    $ENV_ROOT"
+echo "uv:      $(command -v uv)"
 echo
 echo "Run:"
-echo "  av"
 echo
-echo "If '$INSTALL_DIR' is not on PATH, add this to ~/.bashrc:"
-echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+echo "    av"
+echo
