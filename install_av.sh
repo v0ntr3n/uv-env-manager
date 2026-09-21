@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
+ 
 REPO="v0ntr3n/uv-env-manager"
 BRANCH="main"
 RAW="https://raw.githubusercontent.com/$REPO/$BRANCH"
@@ -50,9 +50,6 @@ fi
 
 echo "==> Installing av to $INSTALL_DIR/av"
 
-# -------------------------------------------------------
-# Download av
-# -------------------------------------------------------
 
 TMP_FILE="$(mktemp)"
 
