@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+set -u
+
+# Ubuntu/Linux version of the original PowerShell "av" utility.
+# Environments are stored under AV_ENV_ROOT (default: ~/.local/share/uv_venv).
+
+ENV_ROOT="${AV_ENV_ROOT:-$HOME/.local/share/uv_venv}"
+
+c_reset=$'\033[0m'
+c_cyan=$'\033[36m'
+c_yellow=$'\033[33m'
+c_green=$'\033[32m'
+c_red=$'\033[31m'
+c_gray=$'\033[90m'
+c_white=$'\033[37m'
+
+say() {
+    local color="${2:-$c_white}"
+    printf '%s%s%s\n' "$color" "$1" "$c_reset"
+}
+
+die() {
+    say "[!] $*" "$c_red" >&2
+    exit 1
+}
+
+need_uv() {
+    command -v uv >/dev/null 2>&1 || die "uv is not installed. Run the installer again or install uv first."
+}
+
+activate_path() {
+    local env_dir="$1"
+    if [[ -f "$env_dir/bin/activate" ]]; then
+        printf '%s\n' "$env_dir/bin/activate"
+        return 0
+    fi
+    if [[ -f "$env_dir/.venv/bin/activate" ]]; then
+        printf '%s\n' "$env_dir/.venv/bin/activate"
+        return 0
+    fi
+    return 1
+}
+
+python_path() {
+    local env_dir="$1"
+    if [[ -x "$env_dir/bin/python" ]]; then
+        printf '%s\n' "$env_dir/bin/python"
+        return 0
+    fi
+    if [[ -x "$env_dir/.venv/bin/python" ]]; then
+        printf '%s\n' "$env_dir/.venv/bin/python"
+        return 0
+    fi
+    return 1
+}
+
+get_envs() {
+    ENVS=()
+    [[ -d "$ENV_ROOT" ]] || return 0
+
+    local d
+    while IFS= read -r -d '' d; do
+        if activate_path "$d" >/dev/null 2>&1; then
+            ENVS+=("$d")
+        fi
+    done < <(find "$ENV_ROOT" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null | sort -z)
+}
+
+show_envs() {
+    clear 2>/dev/null || true
+    say "+--------------------------------------------------+" "$c_cyan"
+    say "|          UV VIRTUAL ENVIRONMENT TOOL             |" "$c_cyan"
+    say "|  $ENV_ROOT" "$c_cyan"
+    say "+--------------------------------------------------+" "$c_cyan"
+    printf '\n'
+
+    get_envs
+
+    if ((${#ENVS[@]} == 0)); then
+        say "  (No environments found)" "$c_gray"
+    else
+        say "  Environments:" "$c_yellow"
+        printf '\n'
+        local i d py ver
+        for i in "${!ENVS[@]}"; do
+            d="${ENVS[$i]}"
+            py="$(python_path "$d" 2>/dev/null || true)"
+            ver=""
+            if [[ -n "$py" ]]; then
+                ver="$("$py" --version 2>&1 || true)"
+                [[ -n "$ver" ]] && ver=" ($ver)"
+            fi
+            say "    [$((i + 1))] $(basename "$d")$ver" "$c_white"
+        done
+    fi
+
+    say "    [0]  Create new environment" "$c_green"
+    say "    [q]  Quit" "$c_gray"
+    printf '\n'
+}
+
+open_activated_shell() {
+    local env_dir="$1"
+    local activate
+    activate="$(activate_path "$env_dir")" || die "Activation script not found for $env_dir"
+
+    local shell_bin="${SHELL:-/bin/bash}"
+    say "  Opening activated shell for '$(basename "$env_dir")'..." "$c_cyan"
+    say "  Type 'exit' to return to your previous shell." "$c_gray"
+    printf '\n'
+
+    # Source the venv activation file inside a new interactive shell.
+    # BASH_ENV is not enough for interactive shells, so use -c explicitly.
+    if [[ "$(basename "$shell_bin")" == "zsh" ]]; then
+        exec zsh -i -c "source '$activate'; exec zsh -i"
+    else
+        exec "$shell_bin" -i -c "source '$activate'; exec '$shell_bin' -i"
+    fi
+}
+
+create_env() {
+    printf '\n'
+    say "  -- CREATE NEW ENVIRONMENT --" "$c_green"
+    printf '\n'
+
+    mkdir -p "$ENV_ROOT"
+
+    local env_name
+    read -r -p "  Name: " env_name
+    [[ -n "${env_name//[[:space:]]/}" ]] || return 0
+
+    if [[ ! "$env_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        say "  [!] Use only letters, numbers, underscores, hyphens." "$c_red"
+        return 1
+    fi
+
+    local env_path="$ENV_ROOT/$env_name"
+    if [[ -e "$env_path" ]]; then
+        say "  [!] '$env_name' already exists." "$c_red"
+        return 1
+    fi
+
+    printf '\n'
+    say "  Python version:" "$c_yellow"
+    say "    (Enter e.g. 3.12, 3.11.9, or leave empty for uv default)" "$c_gray"
+    printf '\n'
+
+    local selected_python
+    read -r -p "  Version: " selected_python
+
+    local args=(venv)
+    if [[ -n "${selected_python//[[:space:]]/}" ]]; then
+        say "  Using Python $selected_python" "$c_yellow"
+        args+=(--python "$selected_python")
+    else
+        say "  Using default Python." "$c_yellow"
+    fi
+    args+=("$env_path")
+
+    printf '\n'
+    say "  Creating..." "$c_cyan"
+    if ! uv "${args[@]}"; then
+        say "  [!] Failed to create environment." "$c_red"
+        return 1
+    fi
+
+    say "  [OK] Created: $env_name" "$c_green"
+
+    local py
+    py="$(python_path "$env_path" 2>/dev/null || true)"
+    [[ -n "$py" ]] && say "  $("$py" --version 2>&1)" "$c_white"
+
+    local answer
+    read -r -p "  Open activated shell now? (y/N): " answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+        open_activated_shell "$env_path"
+    fi
+}
+
+usage() {
+    cat <<EOF
+Usage: av [command]
+
+Interactive:
+  av                  Show environments and select/create one
+
+Commands:
+  av list             List environments
+  av create [NAME]    Create an environment
+  av path NAME        Print an environment path
+  av shell NAME       Open an activated shell
+  av remove NAME      Remove an environment
+  av help             Show this help
+
+Environment:
+  AV_ENV_ROOT         Environment directory
+                      Default: $HOME/.local/share/uv_venv
+EOF
+}
+
+cmd_list() {
+    get_envs
+    local d py ver
+    for d in "${ENVS[@]}"; do
+        py="$(python_path "$d" 2>/dev/null || true)"
+        ver=""
+        [[ -n "$py" ]] && ver="$("$py" --version 2>&1 || true)"
+        printf '%-24s %s\n' "$(basename "$d")" "$ver"
+    done
+}
+
+cmd_path() {
+    local name="${1:-}"
+    [[ -n "$name" ]] || die "Usage: av path NAME"
+    local p="$ENV_ROOT/$name"
+    [[ -d "$p" ]] || die "Environment '$name' does not exist."
+    printf '%s\n' "$p"
+}
+
+cmd_shell() {
+    local name="${1:-}"
+    [[ -n "$name" ]] || die "Usage: av shell NAME"
+    local p="$ENV_ROOT/$name"
+    [[ -d "$p" ]] || die "Environment '$name' does not exist."
+    open_activated_shell "$p"
+}
+
+cmd_remove() {
+    local name="${1:-}"
+    [[ -n "$name" ]] || die "Usage: av remove NAME"
+    [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || die "Invalid environment name."
+    local p="$ENV_ROOT/$name"
+    [[ -d "$p" ]] || die "Environment '$name' does not exist."
+
+    local answer
+    read -r -p "Remove '$name' permanently? (y/N): " answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+        rm -rf -- "$p"
+        say "[OK] Removed: $name" "$c_green"
+    fi
+}
+
+need_uv
+
+case "${1:-}" in
+    list)
+        cmd_list
+        exit 0
+        ;;
+    path)
+        cmd_path "${2:-}"
+        exit 0
+        ;;
+    shell)
+        cmd_shell "${2:-}"
+        exit 0
+        ;;
+    remove|rm)
+        cmd_remove "${2:-}"
+        exit 0
+        ;;
+    help|-h|--help)
+        usage
+        exit 0
+        ;;
+    create)
+        if [[ -n "${2:-}" ]]; then
+            mkdir -p "$ENV_ROOT"
+            if [[ ! "$2" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                die "Use only letters, numbers, underscores, hyphens."
+            fi
+            [[ ! -e "$ENV_ROOT/$2" ]] || die "'$2' already exists."
+            uv venv "$ENV_ROOT/$2"
+            say "[OK] Created: $2" "$c_green"
+        else
+            create_env
+        fi
+        exit 0
+        ;;
+    "")
+        ;;
+    *)
+        usage
+        exit 2
+        ;;
+esac
+
+while true; do
+    show_envs
+    read -r -p "  Your choice: " choice
+
+    if [[ "$choice" == "q" || "$choice" == "Q" ]]; then
+        printf '\n'
+        say "  Goodbye!" "$c_green"
+        break
+    fi
+
+    if [[ "$choice" =~ ^[0-9]+$ ]]; then
+        if [[ "$choice" == "0" ]]; then
+            create_env || true
+            printf '\n'
+            read -r -p "  Press Enter to continue..." _
+        elif (( choice >= 1 && choice <= ${#ENVS[@]} )); then
+            selected="${ENVS[$((choice - 1))]}"
+            open_activated_shell "$selected"
+        else
+            say "  [!] Invalid number." "$c_red"
+            sleep 0.6
+        fi
+    else
+        say "  [!] Enter a number or 'q'." "$c_red"
+        sleep 0.6
+    fi
+done
